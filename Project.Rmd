@@ -1,0 +1,92 @@
+Predict Human Activity Using Activity Monitors
+========================================================
+### 0 Load Libraries
+```{r, echo=TRUE, message=FALSE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(ROCR)
+```
+
+### 1 Load Data
+```{r}
+if(!("train" %in% ls()))
+  train <- read.csv("pml-training.csv", stringsAsFactors=FALSE)
+if(!("test" %in% ls()))
+  test <- read.csv("pml-testing.csv", stringsAsFactors=FALSE)
+```
+
+### 2 Data Preprocessing
+Converting class feature to factor
+```{r}
+train$classe <- as.factor(train$classe)
+```
+Features that are not generated from the sensors should be excluded. Features containing NAs should also be excluded.
+```{r}
+# remove features containing NA.
+train <- train[, colSums(is.na(train))==0]
+test <- test[, colSums(is.na(test))==0]
+# remove features not from the sensors
+train <- train[, grepl("X|user_name|timestamp|window|^max|^min|^ampl|^var|^avg|^stdd|^ske|^kurt", colnames(train))==FALSE]
+test <- test[, grepl("X|user_name|timestamp|window|^max|^min|^ampl|^var|^avg|^stdd|^ske|^kurt", colnames(test))==FALSE]
+```
+
+### 3 Modeling
+Choose a cp value for fitting a classification tree model using 10 fold cross validation. 
+```{r}
+# setting up parameters
+fit_control <- trainControl(method="cv", number=10)
+cart_grid <- expand.grid(.cp=(1:50)*0.01)
+# select the cp value
+cv_tree <- train(classe~., data=train, method="rpart", trControl=fit_control, tuneGrid=cart_grid)
+# selected best cp value
+cv_tree$bestTune
+```
+Fit the model using the best cp value choosed using cross validation.
+```{r}
+tree_cv=rpart(classe~., method="class", data=train, control=rpart.control(cp=cv_tree$bestTune))
+```
+
+### 4 Error Estimation
+#### In sample error rate
+Make a prediction on the training set using the model. And calculate the in sample error rate.
+```{r}
+in_sample_prediction <- predict(tree_cv, newdata=train[, 1:52], type ="class")
+in_sample_error <- round(sum(train$classe!=in_sample_prediction)/nrow(train), 2)
+in_sample_error
+```
+
+#### Out of sample error rate estimation
+Using cross validation on the training set to get an estimation of the out of sample error rate.
+```{r, message=FALSE, warning=FALSE}
+# set seed to ensure reproduciblility
+set.seed(100)
+# creating folds
+folds <- sample(rep(1:10, length=nrow(train)))
+# cv.errors will be used to store 10 errors.
+errors_cv <- rep(NA,10)
+for(k in 1:10) {
+  train_data <- train[folds!=k,]
+  test_data <- train[folds==k,1:52]
+  tree <- rpart(classe~., method="class", data=train_data, control=rpart.control(cp=tree_cv$bestTune))
+  prediction <- predict(tree, newdata=test_data, type ="class")
+  errors_cv[k]=1-sum(train_data$classe!=prediction)/nrow(train_data)
+}
+```
+The out of sample error rate estimation is the mean of the 10 error rates.
+```{r}
+out_of_sample_error_estimate <- mean(errors_cv)
+out_of_sample_error_estimate
+```
+The out of sample error rate estimation based on a 10 folds cross validation method is 28.44%.
+
+### 5 Make predictions on the test set
+```{r}
+out_of_sample_prediction = predict(tree_cv, newdata=test[, 1:52], type="class")
+```
+
+### Appendix
+Figure 1: The Tree Model Visualized
+```{r, fig.height=10, fig.width=10, echo=FALSE, message=FALSE}
+prp(tree_cv, main="Tree Model Visualization")
+```
